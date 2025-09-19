@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Real-time Object Detection with Webcam - v2</title>
+        <style>
+            html,
+            body {
+                font-family: Arial, Helvetica, sans-serif;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: flex-start;
+                min-height: 100vh;
+                background-color: #f0f0f0;
+            }
+            .container {
+                margin: 40px auto;
+                width: max(50vw, 400px);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                background-color: white;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            }
+            #video-container {
+                position: relative;
+                width: 100%;
+                max-width: 640px;
+                height: auto;
+                margin-bottom: 20px;
+                background-color: black;
+                border-radius: 4px;
+                overflow: hidden;
+            }
+            #webcam-video,
+            #detection-canvas {
+                width: 100%;
+                height: auto;
+                display: block;
+            }
+            #detection-canvas {
+                position: absolute;
+                top: 0;
+                left: 0;
+            }
+            button {
+                background-color: #4caf50;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+                margin-bottom: 20px;
+            }
+            button:hover {
+                background-color: #45a049;
+            }
+            button:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+            #status {
+                margin-top: 10px;
+                font-weight: bold;
+                color: #333;
+            }
+            #results-container {
+                width: 100%;
+                text-align: left;
+                margin-top: 20px;
+            }
+            #detected-objects-list {
+                list-style-type: none;
+                padding: 0;
+            }
+            #detected-objects-list li {
+                padding: 5px 0;
+                border-bottom: 1px solid #eee;
+            }
+            #debug-info {
+                background-color: #f9f9f9;
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 4px;
+                font-family: monospace;
+                font-size: 12px;
+                max-height: 100px;
+                overflow-y: auto;
+            }
+        </style>
+    </head>
+    <body>
+        <main class="container">
+            <h1>Real-time Object Detection - v2</h1>
+            <div id="video-container">
+                <video id="webcam-video" autoplay playsinline muted></video>
+                <canvas id="detection-canvas"></canvas>
+            </div>
+            <button id="start-webcam">Start Webcam</button>
+            <p id="status">Loading model... Please wait.</p>
+            <div id="results-container">
+                <h2>Detected Objects</h2>
+                <ul id="detected-objects-list"></ul>
+            </div>
+            <div id="debug-info"></div>
+        </main>
+
+        <script type="module">
+            const workerCode = `
+                import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
+
+                env.allowLocalModels = false;
+                let detector = null;
+
+                console.log("Worker v2: Starting initialization");
+
+                (async function () {
+                    try {
+                        console.log("Worker v2: Loading model...");
+                        detector = await pipeline("object-detection", "Xenova/detr-resnet-50");
+                        console.log("Worker v2: Model loaded successfully");
+                        self.postMessage({ type: "ready" });
+                    } catch (error) {
+                        console.error("Worker v2: Model loading failed:", error);
+                        self.postMessage({ type: "error", message: \`Model loading failed: \${error.message}\` });
+                    }
+                })();
+
+                self.onmessage = async (event) => {
+                    console.log("Worker v2: Received message:", event.data.type);
+                    const { type, imageData } = event.data;
+
+                    if (type === "detect" && detector && imageData) {
+                        try {
+                            console.log("Worker v2: Processing ImageData:", imageData.width, "x", imageData.height);
+
+                            // Create ImageData in worker context
+                            const canvas = new OffscreenCanvas(imageData.width, imageData.height);
+                            const ctx = canvas.getContext('2d');
+                            const workerImageData = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+                            ctx.putImageData(workerImageData, 0, 0);
+
+                            console.log("Worker v2: Created OffscreenCanvas, running detection");
+
+                            const results = await detector(canvas, {
+                                threshold: 0.3,
+                                percentage: true,
+                            });
+                            console.log("Worker v2: Detection complete, found", results.length, "objects");
+                            self.postMessage({ type: "results", results });
+
+                        } catch (error) {
+                            console.error("Worker v2: Detection failed:", error);
+                            self.postMessage({ type: "error", message: \`Detection failed: \${error.message}\` });
+                        }
+                    } else if (type === "detect" && !detector) {
+                        console.error("Worker v2: Detector not ready yet");
+                        self.postMessage({ type: "error", message: "Detector not ready yet" });
+                    }
+                };
+            `;
+
+            const blob = new Blob([workerCode], { type: "application/javascript" });
+            const worker = new Worker(URL.createObjectURL(blob), { type: "module" });
+
+            const video = document.getElementById("webcam-video");
+            const canvas = document.getElementById("detection-canvas");
+            const context = canvas.getContext("2d");
+            const startWebcamButton = document.getElementById("start-webcam");
+            const statusElement = document.getElementById("status");
+            const videoContainer = document.getElementById("video-container");
+            const detectedObjectsList = document.getElementById("detected-objects-list");
+            const debugInfo = document.getElementById("debug-info");
+
+            let frameCount = 0;
+            let detectionCount = 0;
+            let pendingDetection = false;
+
+            startWebcamButton.disabled = true;
+
+            function addDebugMessage(message) {
+                const timestamp = new Date().toLocaleTimeString();
+                debugInfo.innerHTML += `[${timestamp}] ${message}<br>`;
+                debugInfo.scrollTop = debugInfo.scrollHeight;
+            }
+
+            worker.onmessage = (event) => {
+                const { type, results, message } = event.data;
+                addDebugMessage(`Main v2: Received ${type} from worker`);
+
+                pendingDetection = false; // Reset the flag
+
+                if (type === "ready") {
+                    statusElement.textContent = "Model loaded. Ready to detect!";
+                    startWebcamButton.disabled = false;
+                    addDebugMessage("Main v2: Worker ready, model loaded");
+                } else if (type === "results") {
+                    detectionCount++;
+                    addDebugMessage(`Main v2: Detection #${detectionCount}, found ${results.length} objects`);
+
+                    // Clear canvas and draw current video frame
+                    context.clearRect(0, 0, canvas.width, canvas.height);
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                    // Clear and update detected objects list
+                    detectedObjectsList.innerHTML = "";
+
+                    if (results.length === 0) {
+                        const listItem = document.createElement("li");
+                        listItem.textContent = "No objects detected";
+                        listItem.style.fontStyle = "italic";
+                        listItem.style.color = "#666";
+                        detectedObjectsList.appendChild(listItem);
+                    } else {
+                        results.forEach((detection) => {
+                            renderBox(detection);
+                            const listItem = document.createElement("li");
+                            const score = (detection.score * 100).toFixed(2);
+                            listItem.textContent = `${detection.label} - ${score}% Confidence`;
+                            detectedObjectsList.appendChild(listItem);
+                        });
+                    }
+
+                    // Continue detection loop
+                    if (video.srcObject && video.readyState >= 2) {
+                        setTimeout(() => {
+                            detectFrame();
+                        }, 100);
+                    } else {
+                        addDebugMessage("Main v2: Not continuing - video not ready");
+                    }
+                } else if (type === "error") {
+                    statusElement.textContent = `Error: ${message}`;
+                    addDebugMessage(`Main v2: Error - ${message}`);
+
+                    // Continue even after error
+                    if (video.srcObject && video.readyState >= 2) {
+                        setTimeout(() => {
+                            detectFrame();
+                        }, 1000);
+                    }
+                }
+            };
+
+            worker.onerror = (error) => {
+                addDebugMessage(`Main v2: Worker error - ${error.message}`);
+                console.error("Worker error:", error);
+            };
+
+            async function startWebcam() {
+                statusElement.textContent = "Requesting webcam access...";
+                addDebugMessage("Main v2: Starting webcam");
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+
+                    video.onloadedmetadata = () => {
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+
+                        startWebcamButton.textContent = "Stop Webcam";
+                        startWebcamButton.onclick = stopWebcam;
+                        statusElement.textContent = "Webcam started. Detecting objects...";
+                        addDebugMessage(`Main v2: Video ready, size: ${video.videoWidth}x${video.videoHeight}`);
+
+                        // Start detection
+                        detectFrame();
+                    };
+                } catch (error) {
+                    statusElement.textContent = `Error accessing webcam: ${error.message}`;
+                    addDebugMessage(`Main v2: Webcam error - ${error.message}`);
+                }
+            }
+
+            function stopWebcam() {
+                addDebugMessage("Main v2: Stopping webcam");
+                if (video.srcObject) {
+                    const stream = video.srcObject;
+                    stream.getTracks().forEach((track) => track.stop());
+                    video.srcObject = null;
+                }
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                detectedObjectsList.innerHTML = "";
+                statusElement.textContent = "Webcam stopped.";
+                startWebcamButton.textContent = "Start Webcam";
+                startWebcamButton.onclick = startWebcam;
+                pendingDetection = false;
+            }
+
+            function detectFrame() {
+                if (!video.srcObject || video.readyState < 2) {
+                    addDebugMessage("Main v2: Video not ready for detection");
+                    return;
+                }
+
+                if (pendingDetection) {
+                    addDebugMessage("Main v2: Detection already pending, skipping");
+                    setTimeout(detectFrame, 100);
+                    return;
+                }
+
+                frameCount++;
+                addDebugMessage(`Main v2: IMAGEDATA METHOD - Processing frame #${frameCount}`);
+                pendingDetection = true;
+
+                try {
+                    // Create temporary canvas
+                    const tempCanvas = document.createElement("canvas");
+                    tempCanvas.width = video.videoWidth;
+                    tempCanvas.height = video.videoHeight;
+                    const tempCtx = tempCanvas.getContext("2d");
+
+                    // Draw video frame
+                    tempCtx.drawImage(video, 0, 0);
+
+                    // Get ImageData instead of blob
+                    const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+                    addDebugMessage(`Main v2: Created ImageData ${imageData.width}x${imageData.height}, sending to worker`);
+
+                    worker.postMessage(
+                        {
+                            type: "detect",
+                            imageData: {
+                                data: imageData.data,
+                                width: imageData.width,
+                                height: imageData.height,
+                            },
+                        },
+                        [imageData.data.buffer],
+                    );
+
+                    // Timeout protection
+                    setTimeout(() => {
+                        if (pendingDetection) {
+                            addDebugMessage("Main v2: Worker timeout, resetting");
+                            pendingDetection = false;
+                            detectFrame();
+                        }
+                    }, 5000);
+                } catch (error) {
+                    addDebugMessage(`Main v2: ImageData error - ${error.message}`);
+                    pendingDetection = false;
+                    setTimeout(detectFrame, 200);
+                }
+            }
+
+            function renderBox({ box, label }) {
+                const { xmax, xmin, ymax, ymin } = box;
+                const color =
+                    "#" +
+                    Math.floor(Math.random() * 0xffffff)
+                        .toString(16)
+                        .padStart(6, "0");
+                const x1 = xmin * canvas.width;
+                const y1 = ymin * canvas.height;
+                const width = (xmax - xmin) * canvas.width;
+                const height = (ymax - ymin) * canvas.height;
+
+                context.strokeStyle = color;
+                context.lineWidth = 2;
+                context.strokeRect(x1, y1, width, height);
+                context.fillStyle = color;
+                context.font = "12px Arial";
+                const textWidth = context.measureText(label).width;
+                context.fillRect(x1, y1 - 18, textWidth + 8, 18);
+                context.fillStyle = "white";
+                context.fillText(label, x1 + 4, y1 - 5);
+            }
+
+            startWebcamButton.onclick = startWebcam;
+            addDebugMessage("Main v2: Application initialized - CANVAS METHOD");
+        </script>
+    </body>
+</html>
