@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Translation Example</title>
+        <script type="module">
+            import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
+
+            // Configure environment
+            env.allowLocalModels = false;
+            env.allowRemoteModels = true;
+            env.backends.onnx.wasm.proxy = false;
+
+            let translator = null;
+
+            // Progress tracking
+            function updateProgress(progress) {
+                const progressBar = document.getElementById("progressBar");
+                const progressText = document.getElementById("progressText");
+                const loadingElement = document.getElementById("loading");
+
+                if (progress && progress.status) {
+                    loadingElement.style.display = "block";
+
+                    if (progress.status === "progress" && progress.total) {
+                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                        const loadedMB = (progress.loaded / (1024 * 1024)).toFixed(2);
+                        const totalMB = (progress.total / (1024 * 1024)).toFixed(2);
+
+                        progressBar.style.display = "block";
+                        progressBar.value = percent;
+                        progressText.innerText = `Downloading ${progress.file || "model"}: ${loadedMB}MB / ${totalMB}MB (${percent}%)`;
+                    } else if (progress.status === "done") {
+                        progressText.innerText = "Download complete! Loading model...";
+                    } else if (progress.status === "initiate") {
+                        progressText.innerText = `Preparing to download ${progress.file || "model files"}...`;
+                        progressBar.style.display = "block";
+                        progressBar.value = 0;
+                    } else if (progress.status === "download") {
+                        progressText.innerText = `Downloading ${progress.file || "model files"}...`;
+                    }
+                }
+            }
+
+            async function loadModel() {
+                const loadingElement = document.getElementById("loading");
+                const translateBtn = document.getElementById("translateBtn");
+                const progressBar = document.getElementById("progressBar");
+                const progressText = document.getElementById("progressText");
+
+                loadingElement.style.display = "block";
+                progressText.innerText = "Initializing...";
+                translateBtn.disabled = true;
+
+                try {
+                    // Try the smallest available model for translation
+                    progressText.innerText = "Loading translation model (this may take 1-2 minutes)...";
+
+                    translator = await pipeline("translation", "Xenova/m2m100_418M", {
+                        progress_callback: updateProgress,
+                        quantized: true, // Use quantized version for smaller size
+                    });
+
+                    progressBar.style.display = "none";
+                    loadingElement.style.display = "none";
+                    progressText.innerText = "Model loaded successfully!";
+                    setTimeout(() => {
+                        progressText.innerText = "";
+                    }, 3000);
+                    translateBtn.disabled = false;
+                    translateBtn.innerText = "Translate";
+                    console.log("Model loaded successfully!");
+                    return true;
+                } catch (error) {
+                    console.error("Model loading failed:", error);
+                    progressBar.style.display = "none";
+                    progressText.innerText = "Error loading model. Details: " + error.message;
+                    progressText.style.color = "red";
+                    loadingElement.style.color = "red";
+                    loadingElement.innerText =
+                        "Failed to load model. This could be due to: network issues, browser memory limits, or firewall blocking Hugging Face. Try: refreshing the page, using a different browser, or checking your internet connection.";
+                    console.error("Full error:", error);
+                    return false;
+                }
+            }
+
+            async function translateText() {
+                const inputText = document.getElementById("inputText").value.trim();
+                const outputTextElement = document.getElementById("outputText");
+
+                if (!inputText) {
+                    outputTextElement.innerText = "Please enter some text to translate.";
+                    return;
+                }
+
+                if (!translator) {
+                    outputTextElement.innerText = "Model not loaded yet. Please wait or refresh the page.";
+                    return;
+                }
+
+                outputTextElement.innerText = "Translating...";
+
+                try {
+                    const result = await translator(inputText, {
+                        src_lang: "pt", // Portuguese
+                        tgt_lang: "en", // English
+                    });
+
+                    console.log("Translation result:", result);
+                    outputTextElement.innerText = result[0].translation_text;
+                } catch (error) {
+                    outputTextElement.innerText = "Error during translation: " + error.message;
+                    console.error("Translation error:", error);
+                }
+            }
+
+            // Load model on page load
+            window.addEventListener("DOMContentLoaded", () => {
+                loadModel();
+
+                document.getElementById("translateBtn").addEventListener("click", translateText);
+
+                // Allow Enter key in textarea to translate
+                document.getElementById("inputText").addEventListener("keydown", (e) => {
+                    if (e.ctrlKey && e.key === "Enter") {
+                        translateText();
+                    }
+                });
+            });
+        </script>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 50px auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+
+            h1 {
+                color: #333;
+                text-align: center;
+            }
+
+            .container {
+                background: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            }
+
+            #inputText {
+                width: 100%;
+                padding: 12px;
+                font-size: 16px;
+                border: 2px solid #ddd;
+                border-radius: 5px;
+                box-sizing: border-box;
+                margin-bottom: 10px;
+                font-family: inherit;
+            }
+
+            #inputText:focus {
+                outline: none;
+                border-color: #4caf50;
+            }
+
+            #translateBtn {
+                background-color: #4caf50;
+                color: white;
+                padding: 12px 30px;
+                font-size: 16px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                width: 100%;
+                font-weight: bold;
+            }
+
+            #translateBtn:hover:not(:disabled) {
+                background-color: #45a049;
+            }
+
+            #translateBtn:disabled {
+                background-color: #cccccc;
+                cursor: not-allowed;
+            }
+
+            #loading {
+                display: none;
+                font-size: 1.1em;
+                color: #2196f3;
+                margin: 10px 0;
+                text-align: center;
+                padding: 10px;
+                background-color: #e3f2fd;
+                border-radius: 5px;
+            }
+
+            #progressText {
+                font-size: 0.95em;
+                font-weight: 500;
+                text-align: center;
+                color: #2196f3;
+                margin: 10px 0;
+                min-height: 20px;
+            }
+
+            #progressBar {
+                width: 100%;
+                height: 25px;
+                display: none;
+                margin-bottom: 15px;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+            }
+
+            #progressBar::-webkit-progress-bar {
+                background-color: #f0f0f0;
+                border-radius: 5px;
+            }
+
+            #progressBar::-webkit-progress-value {
+                background-color: #4caf50;
+                border-radius: 5px;
+                transition: width 0.3s ease;
+            }
+
+            #progressBar::-moz-progress-bar {
+                background-color: #4caf50;
+                border-radius: 5px;
+            }
+
+            #outputText {
+                margin-top: 20px;
+                padding: 20px;
+                background-color: #f0f7f0;
+                border-left: 4px solid #4caf50;
+                min-height: 60px;
+                font-size: 16px;
+                border-radius: 5px;
+                line-height: 1.6;
+            }
+
+            .hint {
+                color: #666;
+                font-size: 14px;
+                margin-top: 5px;
+                text-align: center;
+            }
+
+            .note {
+                background-color: #fff3cd;
+                border: 1px solid #ffc107;
+                padding: 10px;
+                border-radius: 5px;
+                margin-bottom: 15px;
+                font-size: 14px;
+            }
+
+            .warning {
+                background-color: #f8d7da;
+                border: 1px solid #f5c6cb;
+                padding: 10px;
+                border-radius: 5px;
+                margin-bottom: 15px;
+                font-size: 14px;
+                color: #721c24;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>🇧🇷 Portuguese to English Translator 🇺🇸</h1>
+        <div class="container">
+            <div class="note">
+                <strong>⏳ Note:</strong> First load will download ~420MB model. This may take 2-5 minutes depending on
+                your connection. The model will be cached after first download.
+            </div>
+            <p id="loading">Initializing translation model...</p>
+            <p id="progressText"></p>
+            <progress id="progressBar" value="0" max="100"></progress>
+            <textarea
+                id="inputText"
+                rows="5"
+                placeholder="Digite seu texto em português aqui... (e.g., Olá, como você está?)"
+            ></textarea>
+            <div class="hint">💡 Tip: Press Ctrl+Enter to translate</div>
+            <button id="translateBtn" disabled>Loading model...</button>
+            <div id="outputText">Translation will appear here...</div>
+        </div>
+    </body>
+</html>
