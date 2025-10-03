@@ -29,13 +29,16 @@ tmux
 # Minimal command to download a single video file (best pre-merged format, no warning)
 yt-dlp --proxy "socks5h://127.0.0.1:9050" -f b "[VIDEO_URL]"
 
+# Up tp 720p
+yt-dlp --proxy "socks5h://127.0.0.1:9050" -f "bestaudio/bestvideo[height<=720]" "[VIDEO_URL]"
+
 # Alternative commands:
 
 # Download best video + audio merged into one file (requires ffmpeg)
 yt-dlp --proxy "socks5h://127.0.0.1:9050" -f "bestvideo+bestaudio" -o "%(title)s.%(ext)s" "[VIDEO_URL]"
 
-# Download audio only
-yt-dlp --proxy "socks5h://127.0.0.1:9050" -f "bestaudio" -o "%(title)s.%(ext)s" "[VIDEO_URL]"
+# Download mp3 (convertion)
+yt-dlp --proxy "socks5h://127.0.0.1:9050" -x --audio-format mp3 "[VIDEO_URL]"
 
 # 6. Check downloaded files in shared folder
 ls /shared

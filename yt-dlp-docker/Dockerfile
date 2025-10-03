@@ -1,7 +1,7 @@
 FROM alpine:latest
 
 # Install Python (needed for yt-dlp binary), ffmpeg, tor, curl, tmux
-RUN apk add --no-cache python3 ffmpeg tor curl ca-certificates tmux
+RUN apk add --no-cache python3 ffmpeg tor curl ca-certificates btop htop tmux
 
 # Download yt-dlp binary (prebuilt, avoids pip issues)
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \

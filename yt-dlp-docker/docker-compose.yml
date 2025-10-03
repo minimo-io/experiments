@@ -3,6 +3,6 @@ services:
         build: .
         container_name: ytdlp
         volumes:
-            - /Users/nicolaserramuspe/Development/linux1/shared:/shared
+            - ./shared:/shared
         stdin_open: true
         tty: true
