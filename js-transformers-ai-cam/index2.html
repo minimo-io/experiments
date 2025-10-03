@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>COCO-SSD Object Detection (TFJS)</title>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+        <style>
+            video,
+            canvas {
+                position: absolute;
+                top: 0;
+                left: 0;
+            }
+        </style>
+    </head>
+    <body>
+        <video id="video" width="640" height="480" autoplay playsinline muted></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+
+        <script>
+            async function setupCamera() {
+                const video = document.getElementById("video");
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => resolve(video);
+                });
+            }
+
+            async function run() {
+                const video = await setupCamera();
+                video.play();
+
+                const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+                // you can use 'mobilenet_v1' (faster) or 'lite_mobilenet_v2' (more efficient)
+
+                const canvas = document.getElementById("canvas");
+                const ctx = canvas.getContext("2d");
+
+                async function detectFrame() {
+                    const predictions = await model.detect(video);
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                    predictions.forEach((pred) => {
+                        ctx.strokeStyle = "#00FF00";
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(pred.bbox[0], pred.bbox[1], pred.bbox[2], pred.bbox[3]);
+
+                        ctx.fillStyle = "#00FF00";
+                        ctx.font = "16px Arial";
+                        ctx.fillText(
+                            `${pred.class} (${(pred.score * 100).toFixed(1)}%)`,
+                            pred.bbox[0],
+                            pred.bbox[1] > 10 ? pred.bbox[1] - 5 : 10,
+                        );
+                    });
+
+                    requestAnimationFrame(detectFrame);
+                }
+
+                detectFrame();
+            }
+
+            run();
+        </script>
+    </body>
+</html>
